@@ -245,7 +245,9 @@ if (doc !== undefined) {
     check(relRows.length > 0, 'the lifecycle plugin is mounted by relative path',
       `${relRows.length} relative row(s)`);
     for (const r of relRows) {
-      const source = join(here, '..', basename(r.name));
+      // The source tree now mirrors the installed layout: the plugin ships INSIDE
+      // `cluster-preset/`, which is also where the bundle's patch resolves it.
+      const source = join(here, '..', r.name.replace(/^\.\//, ''));
       check(existsSync(source), `${r.id}: relative plugin exists in the source tree`, source);
       check(r.name.startsWith(`./${PLUGIN_SUBDIR}/`),
         `${r.id}: relative plugin is namespaced to ./${PLUGIN_SUBDIR}/`, r.name);
@@ -262,8 +264,8 @@ if (doc !== undefined) {
     //   TURN/END {"kind":"error","error":{"code":"REQUEST_EXTENSION"}}
     //
     // so EVERY turn on a DeepSeek-model session of this preset dies before the
-    // model is called. `install.mjs` copies this manifest in; keep them in step.
-    const MANIFEST_SOURCE = 'cluster-preset.package.json';
+    // model is called. It ships at `cluster-preset/package.json`; keep in step.
+    const MANIFEST_SOURCE = join(PLUGIN_SUBDIR, 'package.json');
     const manifestFile = join(here, '..', MANIFEST_SOURCE);
     if (check(existsSync(manifestFile), 'the relative plugin ships an owning manifest', manifestFile)) {
       let manifest;
@@ -278,8 +280,11 @@ if (doc !== undefined) {
         check(typeof manifest.version === 'string' && manifest.version.length > 0,
           'the owning manifest declares a non-empty version', String(manifest.version));
       }
+      // Assert on the path-independent part: install.mjs may spell the separator
+      // either way, and this script builds the joined path with the platform's.
       const installer = readFileSync(join(here, 'install.mjs'), 'utf8');
-      check(installer.includes(MANIFEST_SOURCE),
+      check(installer.includes(MANIFEST_SOURCE)
+        || installer.includes(MANIFEST_SOURCE.replace(/\\/g, '/')),
         'install.mjs copies that manifest into the profile', MANIFEST_SOURCE);
     }
 

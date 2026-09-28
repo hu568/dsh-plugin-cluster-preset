@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const pluginPath = join(here, '..', 'lifecycle-reminder.js');
+const pluginPath = join(here, '..', 'cluster-preset', 'lifecycle-reminder.js');
 
 const mod = await import(pathToFileURL(pluginPath).href
   // Cache-bust so a re-run after editing picks up the new file.

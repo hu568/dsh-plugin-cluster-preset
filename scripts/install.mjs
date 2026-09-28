@@ -28,7 +28,7 @@
 //   node scripts/install.mjs            # install / refresh
 //   node scripts/install.mjs --remove   # uninstall
 import { readFileSync, writeFileSync, copyFileSync, existsSync, rmSync, mkdirSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -41,7 +41,10 @@ const PROFILE = 'C:\\Users\\Administrator\\.dsh\\profiles\\desktop';
 const target = join(PROFILE, 'cordis.patch.yml');
 
 // Plugins referenced by relative path from the patch, and therefore copied in.
-const RELATIVE_PLUGINS = ['lifecycle-reminder.js'];
+// They ship inside `PLUGIN_DIR_NAME` in the source tree too, so the repository
+// layout mirrors the installed layout: as a bundle the patch resolves them
+// inside the package, and this script's copy satisfies the non-bundle path.
+const RELATIVE_PLUGINS = [join('cluster-preset', 'lifecycle-reminder.js')];
 
 // ── the owning manifest ───────────────────────────────────────────────────────
 // A relative-path plugin needs an owning `package.json` that declares a
@@ -63,8 +66,8 @@ const RELATIVE_PLUGINS = ['lifecycle-reminder.js'];
 // it, which is why this stayed hidden.)
 //
 // Shipping this manifest gives the plugin a proper identity and keeps the
-// inventory happy. See `cluster-preset.package.json` in the source tree.
-const MANIFEST_SOURCE = 'cluster-preset.package.json';
+// inventory happy. It lives beside the plugin at `cluster-preset/package.json`.
+const MANIFEST_SOURCE = join('cluster-preset', 'package.json');
 const MANIFEST_TARGET = 'package.json';
 
 /** Managed-block boundary: stable text, no path baked in. */
@@ -105,7 +108,7 @@ const hadBlock = block !== undefined;
 if (remove) {
   writeFileSync(target, current, 'utf8');
   let removed = 0;
-  for (const name of [...RELATIVE_PLUGINS, MANIFEST_TARGET]) {
+  for (const name of [...RELATIVE_PLUGINS.map(basename), MANIFEST_TARGET]) {
     const dest = join(pluginDir, name);
     if (existsSync(dest)) {
       rmSync(dest, { force: true });
@@ -123,12 +126,14 @@ if (remove) {
 
 // ── copy the relative-path plugins beside the patch ───────────────────────────
 mkdirSync(pluginDir, { recursive: true });
-for (const name of RELATIVE_PLUGINS) {
-  const src = join(srcRoot, name);
+for (const rel of RELATIVE_PLUGINS) {
+  const src = join(srcRoot, rel);
   if (!existsSync(src)) {
     throw new Error(`install: missing plugin source ${src} — run scripts/build-preset.mjs first?`);
   }
-  copyFileSync(src, join(pluginDir, name));
+  // Copy to the SAME relative position under the profile, so the layout is
+  // identical whether the patch lives in a bundle or in the profile itself.
+  copyFileSync(src, join(pluginDir, basename(rel)));
 }
 
 // The owning manifest must sit in the SAME directory as the relative plugin, so

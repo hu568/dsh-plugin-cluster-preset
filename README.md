@@ -12,7 +12,7 @@
 | **编排者人设** | 意图门 → 委派检查 → 并行扇出 → 验证 → 失败恢复的整套工作法 |
 | **5 个专家委派工具** | `explore` / `librarian` / `oracle` / `metis` / `momus`，每个一个具名工具 |
 | **2 个通用委派工具** | `subagent`（全新上下文）/ `subagent_fork`（继承本会话） |
-| **寿命论阶段提示器** | [`lifecycle-reminder.js`](lifecycle-reminder.js)：按理论上下文占用折算年龄，进入四个壮年阶段时各提示一次 |
+| **寿命论阶段提示器** | [`cluster-preset/lifecycle-reminder.js`](cluster-preset/lifecycle-reminder.js)：按理论上下文占用折算年龄，进入四个壮年阶段时各提示一次 |
 | 编排者自带的工具 | 与出厂 `standard` 预设同款：文件、搜索、终端、todo、web、skill… |
 
 ### 专家名册
@@ -150,7 +150,27 @@
 
 ## 安装
 
-### 方式一：脚本（推荐，幂等）
+### 方式零：作为 bundle 安装（推荐）
+
+本仓库是一个可分发的 DSH **bundle** —— 判据是 `package.json` 里的
+`dsh.bundle.patch`（`dsh-plugin-manager/lib/index.js:226-229` 是唯一判定代码）。
+DSH 在分发层只认 bundle：
+
+```
+plugin_manager action=install_bundle target="github:hu568/dsh-plugin-cluster-preset"
+```
+
+桌面端（Electron profile）用「设置 → 插件」或插件管理器 UI 添加同一个 spec 即可。
+
+> ⚠️ **代码改动要完全重启 DSH。** `dsh-hmr` 的 `ignored` 默认含 `**/node_modules`，
+> 而插件就装在 `profiles/<name>/node_modules/` 下 —— 不在监听范围内；
+> 再者 Node ESM 的 `loadCache` 会缓存已 import 的模块。
+> 只有**改 patch 配置**才热生效。
+>
+> ⚠️ **更新时必须 bump `version`。** DSH 靠 profile 依赖差分识别装了哪个包；
+> 内容变了而 spec 字符串没变会报 `ambiguous-install`。
+
+### 方式一：脚本（幂等，适合本地开发）
 
 ```powershell
 # 安装 / 刷新
@@ -161,9 +181,8 @@ node scripts/install.mjs --remove
 ```
 
 它把预设块追加进 `%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml`，用注释标记包起来，
-重跑会**替换**而不是叠加。同时把 `lifecycle-reminder.js` 与 `cluster-preset.package.json`
-（落成 `cluster-preset/package.json`）复制到 `profiles\desktop\cluster-preset\`，
-卸载时一并删除。执行前请自行备份该文件。
+重跑会**替换**而不是叠加。同时把 `cluster-preset/` 的内容复制到
+`profiles\desktop\cluster-preset\`，卸载时一并删除。执行前请自行备份该文件。
 
 > ⚠️ **相对路径插件必须跟着补丁走。** 预设的子行按**声明它的补丁文件所在目录**解析，
 > 所以 YAML 里写的是 `./cluster-preset/lifecycle-reminder.js`。
@@ -191,15 +210,16 @@ node scripts/install.mjs --remove
 > 而用其它 provider（例如 profile 默认的 WorkBuddy）时那条扩展路径根本不执行，
 > 所以单看默认模型完全看不出问题 —— 这也是它一直潜伏的原因。
 >
-> 修法就是随插件一起发一个 `cluster-preset/package.json`（源文件
-> `cluster-preset.package.json`，`install.mjs` 负责复制并校验 `name`/`version` 非空）。
-> `scripts/validate.mjs` 会检查它存在且字段合法，也会检查 `install.mjs` 确实复制它。
+> 修法就是随插件一起发一个 `cluster-preset/package.json`（`install.mjs` 负责复制并校验
+> `name`/`version` 非空）。`scripts/validate.mjs` 会检查它存在且字段合法，
+> 也会检查 `install.mjs` 确实复制它。
 
-### 方式二：手工
+### 方式二：手工（从 GitHub 克隆后）
 
-1. 把 `cluster.patch.yml` 的 `- insert:` 块内容追加进 profile 的 `cordis.patch.yml`
-2. 建 `profiles\desktop\cluster-preset\`，把 `lifecycle-reminder.js` 复制进去
-3. 把 `cluster-preset.package.json` 复制为 `profiles\desktop\cluster-preset\package.json`
+1. 把 `cluster.patch.yml`（或 `cordis.patch.yml`，两者内容相同）的 `- insert:` 块
+   追加进 profile 的 `cordis.patch.yml`
+2. 建 `profiles\desktop\cluster-preset\`，把 `cluster-preset/lifecycle-reminder.js` 复制进去
+3. 把 `cluster-preset/package.json` 复制为 `profiles\desktop\cluster-preset\package.json`
    （**别省**，见上面那条警告）
 
 ### 生效方式
@@ -328,7 +348,11 @@ node scripts/build-preset.mjs
 
 ```
 cluster.patch.yml              生成物：可直接安装的 profile 补丁
-lifecycle-reminder.js          寿命论阶段提示器（零依赖，随预设分发的相对路径插件）
+package.json                   bundle 清单（dsh.bundle.patch）—— 分发的唯一判据
+cordis.patch.yml               bundle patch 入口
+cluster-preset/
+  lifecycle-reminder.js        寿命论阶段提示器（零依赖，随预设分发的相对路径插件）
+  package.json                 相对路径插件的归属清单（name+version 必须非空）
 prompts/orchestrator.md        编排者人设
 prompts/explore.md             探查者
 prompts/librarian.md           书库管理员

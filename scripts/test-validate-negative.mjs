@@ -45,9 +45,12 @@ const work = mkdtempSync(join(tmpdir(), 'cluster-validate-'));
 try {
   mkdirSync(join(work, 'scripts'), { recursive: true });
   mkdirSync(join(work, 'prompts'), { recursive: true });
+  mkdirSync(join(work, 'cluster-preset'), { recursive: true });
   copyFileSync(join(root, 'cluster.patch.yml'), join(work, 'cluster.patch.yml'));
-  copyFileSync(join(root, 'lifecycle-reminder.js'), join(work, 'lifecycle-reminder.js'));
-  copyFileSync(join(root, 'cluster-preset.package.json'), join(work, 'cluster-preset.package.json'));
+  copyFileSync(join(root, 'cluster-preset', 'lifecycle-reminder.js'),
+    join(work, 'cluster-preset', 'lifecycle-reminder.js'));
+  copyFileSync(join(root, 'cluster-preset', 'package.json'),
+    join(work, 'cluster-preset', 'package.json'));
   copyFileSync(join(root, 'scripts', 'validate.mjs'), join(work, 'scripts', 'validate.mjs'));
   copyFileSync(join(root, 'scripts', 'install.mjs'), join(work, 'scripts', 'install.mjs'));
 
@@ -120,8 +123,8 @@ try {
   // own version-less `package.json`, and the DeepSeek request-extension
   // inventory throws — killing every turn with REQUEST_EXTENSION.
   writeFileSync(yml2, before, 'utf8'); // restore the good patch
-  rmSync(join(work, 'cluster-preset.package.json'), { force: true });
-  console.log('\n=== removed cluster-preset.package.json ===');
+  rmSync(join(work, 'cluster-preset', 'package.json'), { force: true });
+  console.log('\n=== removed cluster-preset/package.json ===');
   const r4 = runValidate(work);
   console.log(`=== no-manifest preset -> exit ${r4.code} ===`);
   const d4 = r4.out.split('=== failures ===')[1] ?? r4.out;

@@ -1,0 +1,44 @@
+{
+  "name": "@dsh-external/dsh-cluster-preset",
+  "version": "0.1.0",
+  "description": "DSH「集群模式」agent preset：主控智能体自主编排 5 个具名专家（explore/librarian/oracle/metis/momus）与 2 个通用委派，并行扇出并回收验证；附「智能体寿命论」阶段提示器（按上下文占用折算年龄，20/30/40/60 岁各提示一次）",
+  "type": "module",
+  "files": [
+    "cluster.patch.yml",
+    "cordis.patch.yml",
+    "cluster-preset",
+    "prompts",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hu568/dsh-plugin-cluster-preset.git"
+  },
+  "homepage": "https://github.com/hu568/dsh-plugin-cluster-preset#readme",
+  "bugs": {
+    "url": "https://github.com/hu568/dsh-plugin-cluster-preset/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-plugin-pack",
+    "cordis",
+    "cordis-plugin",
+    "agent-preset",
+    "subagent",
+    "orchestration"
+  ],
+  "engines": {
+    "dsh": ">=0.1.5-rc <2"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
