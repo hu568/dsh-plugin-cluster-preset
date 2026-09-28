@@ -1,0 +1,3 @@
+# Local scratch — exported session dumps, one-off probes, temp output.
+# The keepers live in scripts/; anything here is disposable.
+TMP/

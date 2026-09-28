@@ -43,6 +43,30 @@ const target = join(PROFILE, 'cordis.patch.yml');
 // Plugins referenced by relative path from the patch, and therefore copied in.
 const RELATIVE_PLUGINS = ['lifecycle-reminder.js'];
 
+// ── the owning manifest ───────────────────────────────────────────────────────
+// A relative-path plugin needs an owning `package.json` that declares a
+// non-empty `name` AND `version`. Without one, the nearest manifest walking up
+// from `cluster-preset/` is the PROFILE's own `package.json`, which DSH creates
+// with `name` but NO `version`.
+//
+// That matters because of the DeepSeek request-extension inventory
+// (`@deepseek-ai/dsh-plugin-package-inventory-deepseek`, default-on): it walks
+// every active entry of the requesting agent's preset tree and resolves each
+// one's owning package identity. A manifest with a name but no version makes it
+// throw, and the adapter surfaces that as
+//
+//   TURN/END {"kind":"error","error":{"code":"REQUEST_EXTENSION",
+//             "message":"DeepSeek request extension preparation failed"}}
+//
+// i.e. EVERY turn on a DeepSeek-model session of this preset dies before the
+// model is even called. (Sessions on the profile's default provider do not hit
+// it, which is why this stayed hidden.)
+//
+// Shipping this manifest gives the plugin a proper identity and keeps the
+// inventory happy. See `cluster-preset.package.json` in the source tree.
+const MANIFEST_SOURCE = 'cluster-preset.package.json';
+const MANIFEST_TARGET = 'package.json';
+
 /** Managed-block boundary: stable text, no path baked in. */
 const MARKER = 'cluster preset';
 const BEGIN = `# >>>>>>>>>>>> ${MARKER} (managed by scripts/install.mjs) >>>>>>>>>>>>`;
@@ -81,7 +105,7 @@ const hadBlock = block !== undefined;
 if (remove) {
   writeFileSync(target, current, 'utf8');
   let removed = 0;
-  for (const name of RELATIVE_PLUGINS) {
+  for (const name of [...RELATIVE_PLUGINS, MANIFEST_TARGET]) {
     const dest = join(pluginDir, name);
     if (existsSync(dest)) {
       rmSync(dest, { force: true });
@@ -107,11 +131,25 @@ for (const name of RELATIVE_PLUGINS) {
   copyFileSync(src, join(pluginDir, name));
 }
 
+// The owning manifest must sit in the SAME directory as the relative plugin, so
+// the inventory's nearest-manifest walk finds it before the (version-less)
+// profile manifest. Validate it here rather than discovering it at request time.
+{
+  const src = join(srcRoot, MANIFEST_SOURCE);
+  if (!existsSync(src)) throw new Error(`install: missing manifest source ${src}`);
+  const manifest = JSON.parse(readFileSync(src, 'utf8'));
+  if (typeof manifest.name !== 'string' || manifest.name.length === 0
+    || typeof manifest.version !== 'string' || manifest.version.length === 0) {
+    throw new Error(`install: ${MANIFEST_SOURCE} must declare non-empty name and version`);
+  }
+  copyFileSync(src, join(pluginDir, MANIFEST_TARGET));
+}
+
 const preset = readFileSync(srcFile, 'utf8').trimEnd();
 
 const next = `${current.trimEnd()}\n\n${BEGIN}\n${preset}\n${END}\n`;
 writeFileSync(target, next, 'utf8');
 
 console.log(`${hadBlock ? 'refreshed' : 'appended'} the cluster preset block`);
-console.log(`copied ${RELATIVE_PLUGINS.length} plugin file(s) -> ${pluginDir}`);
+console.log(`copied ${RELATIVE_PLUGINS.length} plugin file(s) + ${MANIFEST_TARGET} -> ${pluginDir}`);
 console.log(`wrote ${target} (${next.length} bytes)`);

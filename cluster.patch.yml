@@ -1021,7 +1021,6 @@
             config:
               provider: spawn
               toolName: subagent
-              modelSelectionSettings: true
               backgroundMode: continuable
           - id: cluster-subagent-fork
             name: '@deepseek-ai/dsh-tool-subagent'

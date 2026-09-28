@@ -154,15 +154,46 @@ const GROUPED_TOOLS = [
 // because that check runs on the child, not on the caller — it does not mean
 // "this agent may not delegate".)
 //
-// `toolFilter` then removes the delegation tools from each specialist's surface
-// anyway, so the constraint is belt-and-braces rather than the only guard.
-// `deny` is chosen over `allow` so a specialist keeps the ordinary working
-// tools (read/grep/glob/pwsh/web) without this file having to re-list them.
+// `toolFilter` then hides the delegation tools from each specialist's surface,
+// so the constraint is belt-and-braces rather than the only guard. `deny` is
+// chosen over `allow` so a specialist keeps the ordinary working tools
+// (read/grep/glob/pwsh/web) without this file having to re-list them.
 //
-// Both filter names and `maxDepth` are validated when the child is created, not
-// at load, so a misspelling surfaces on the first delegation. `validate.mjs`
-// pins every name against the real global registry to catch that up front.
-
+// ── why the generic rows must NOT set `modelSelectionSettings` ───────────────
+// `tools.restrict()` can only remove a name the calling scope INHERITS. Its
+// valid-name set is "the global layer plus every ANCESTOR layer on the scope
+// chain — never what the scope's OWN layer registers"
+// (`dsh-tools/lib/index.js:2937-2958`, loop at 2962-2974).
+//
+// `modelSelectionSettings: true` moves a row's registration INTO each agent's
+// own layer: instead of registering at mount time, `dsh-tool-subagent` waits
+// for an Agent and registers through `candidate.ctx.inject(...)`
+// (`dsh-tool-subagent/lib/index.js:610-659`). Two things follow, and both bite:
+//
+//   1. Naming that tool in a `deny` list is REJECTED before the child is ever
+//      created — `restrict()` refuses a name it cannot restrict:
+//
+//        tools.restrict() names unknown global tool "subagent";
+//        known global tools: …, explore, …, subagent_fork, …
+//
+//      (Note the asymmetry that identifies it: `subagent_fork`, a mount-time
+//      row, IS in that list; `subagent` is not. This is the shipped defect.)
+//
+//   2. Worse, EVERY delegated child gets its own copy of the tool — a depth-1
+//      specialist included — and own-layer registrations are exempt from
+//      restrictions, so no filter can ever take it away from them.
+//
+// Leaving the flag off keeps registration at mount time (an ancestor layer),
+// where `deny` works and a specialist simply never sees a delegation tool. That
+// is what makes "每个专家都是叶子" true by the filter rather than by wishful
+// thinking; `maxDepth: 1` remains as the independent second guard.
+//
+// The trade-off is deliberate: `modelSelectionSettings` would also expose
+// per-child `provider`/`model`/`reasoning_effort` arguments and the
+// `list_subagent_models` tool. Re-enabling it is possible, but then `subagent`
+// must come OUT of every deny list (naming it would crash again) and the leaf
+// guarantee falls back to the depth cap alone. `validate.mjs` fails if the flag
+// is ever set while the name is still denied.
 const LEAF = ['subagent', 'subagent_fork', 'explore', 'librarian', 'oracle', 'metis', 'momus'];
 
 const specialists = [
@@ -221,13 +252,17 @@ ${s.deny.map((n) => `    - ${n}`).join('\n')}`,
 // Generic delegation, for work with no matching specialist. These are NOT
 // depth-capped here, so they inherit the Host `subagent.maxDepth` setting —
 // which is also how the shipped `standard` preset behaves.
+//
+// `modelSelectionSettings` is deliberately ABSENT. It would move the tool into
+// each agent's own scope layer, making it impossible to deny for a specialist
+// and handing every delegated child a recursion path nobody can filter away.
+// See the long note above `LEAF`; `validate.mjs` enforces the pairing.
 const genericRows = [
   row({
     id: 'cluster-subagent',
     name: '@deepseek-ai/dsh-tool-subagent',
     config: `provider: spawn
 toolName: subagent
-modelSelectionSettings: true
 backgroundMode: continuable`,
   }),
   row({

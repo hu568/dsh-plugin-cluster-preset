@@ -153,8 +153,14 @@ if (doc !== undefined) {
       varProblems.join('; '));
 
     // ── 6. toolFilter names ───────────────────────────────────────────────────
-    // The live registry validates these at child creation, so a typo fails at
-    // the first delegation rather than at load. Mirror the real set.
+    // `tools.restrict()` validates every name against what it can actually
+    // restrict, and `dsh-tools` defines that as "the global layer plus every
+    // ANCESTOR layer on the scope chain — never the calling scope's OWN layer"
+    // (dsh-tools/lib/index.js:2937-2958). So the set is two-sided, and getting
+    // this wrong is exactly the bug this section now catches.
+    //
+    // ANCESTOR-owned: registered at preset mount time, therefore restrictable
+    // from a delegating agent's scope.
     const GLOBAL_TOOLS = new Set([
       'read', 'read_image', 'write', 'edit',
       'glob', 'grep',
@@ -168,13 +174,33 @@ if (doc !== undefined) {
       'exit_plan_mode',
       'list_agents', 'send_message', 'interrupt_agent',
       'workflow',
-      // delegation tools created by this very preset
+      // delegation tools registered at mount by this very preset
       'subagent', 'subagent_fork', 'explore', 'librarian', 'oracle', 'metis', 'momus',
     ]);
 
-    const filterProblems = [];
     const subagentRows = plugins.filter((p) => p?.name === '@deepseek-ai/dsh-tool-subagent');
     check(subagentRows.length >= 5, 'specialist roster present', `${subagentRows.length} rows`);
+
+    // AGENT-owned: a row with `modelSelectionSettings: true` does not register
+    // at mount. `dsh-tool-subagent` waits for an Agent and registers through
+    // `candidate.ctx.inject(...)` — into THAT AGENT'S OWN layer
+    // (dsh-tool-subagent/lib/index.js:610-659). Every agent joining this preset,
+    // specialists included, therefore owns a copy of these tool names, and a
+    // scope can never restrict away a tool it owns. Naming one in a `toolFilter`
+    // throws on the first delegation:
+    //
+    //   tools.restrict() names unknown global tool "subagent";
+    //   known global tools: …, explore, …, subagent_fork, …
+    //
+    // This set is DERIVED from the preset rather than hardcoded, so adding a
+    // second model-selection row cannot silently reopen the hole.
+    const perAgentTools = new Set(
+      subagentRows
+        .filter((p) => p?.config?.modelSelectionSettings === true)
+        .map((p) => p.config.toolName),
+    );
+
+    const filterProblems = [];
 
     const toolNames = new Set();
     for (const p of subagentRows) {
@@ -198,6 +224,16 @@ if (doc !== undefined) {
         for (const name of f[kind] ?? []) {
           if (name === 'run_code') filterProblems.push(`${p.id}: names reserved transport "run_code"`);
           else if (!GLOBAL_TOOLS.has(name)) filterProblems.push(`${p.id}.${kind}: unknown tool "${name}"`);
+          // A per-agent registration is not restrictable from that agent's own
+          // scope, so naming it throws on the first delegation. This is the
+          // exact defect that shipped once: `subagent` was in every deny list.
+          else if (perAgentTools.has(name)) {
+            filterProblems.push(
+              `${p.id}.${kind}: names per-agent tool "${name}" `
+              + `(registered through the agent's own scope via modelSelectionSettings, `
+              + `so tools.restrict() rejects it — the depth cap is the guard for this name)`,
+            );
+          }
         }
       }
     // ── 8. the relative-path plugin resolves to a real file ───────────────────
@@ -215,29 +251,88 @@ if (doc !== undefined) {
         `${r.id}: relative plugin is namespaced to ./${PLUGIN_SUBDIR}/`, r.name);
     }
 
+    // ── 8b. the relative plugin's OWNING MANIFEST ─────────────────────────────
+    // It must sit in the same installed directory and declare a non-empty name
+    // AND version. Otherwise the nearest manifest walking up from that directory
+    // is the PROFILE's own `package.json` — which DSH writes with a name but NO
+    // version — and the DeepSeek request-extension inventory
+    // (`@deepseek-ai/dsh-plugin-package-inventory-deepseek`, default-on) throws
+    // on exactly that shape. The adapter then surfaces
+    //
+    //   TURN/END {"kind":"error","error":{"code":"REQUEST_EXTENSION"}}
+    //
+    // so EVERY turn on a DeepSeek-model session of this preset dies before the
+    // model is called. `install.mjs` copies this manifest in; keep them in step.
+    const MANIFEST_SOURCE = 'cluster-preset.package.json';
+    const manifestFile = join(here, '..', MANIFEST_SOURCE);
+    if (check(existsSync(manifestFile), 'the relative plugin ships an owning manifest', manifestFile)) {
+      let manifest;
+      try {
+        manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+      } catch (error) {
+        failures.push(`the owning manifest is not valid JSON — ${error.message}`);
+      }
+      if (manifest !== undefined) {
+        check(typeof manifest.name === 'string' && manifest.name.length > 0,
+          'the owning manifest declares a non-empty name', String(manifest.name));
+        check(typeof manifest.version === 'string' && manifest.version.length > 0,
+          'the owning manifest declares a non-empty version', String(manifest.version));
+      }
+      const installer = readFileSync(join(here, 'install.mjs'), 'utf8');
+      check(installer.includes(MANIFEST_SOURCE),
+        'install.mjs copies that manifest into the profile', MANIFEST_SOURCE);
+    }
+
     // ── 9. leaf semantics ───────────────────────────────────────────────────
-      // A specialist must be a leaf: it may not delegate onward. Two independent
-      // guards enforce that, and both should hold.
+      // A specialist must be a leaf: it may not delegate onward. The guard for
+      // that is `maxDepth: 1`, and it is a HARD runtime check — the depth is
+      // resolved on the child being created (`childDepth =
+      // delegationDepthOf(parent) + 1`, refused when `childDepth > maxDepth`),
+      // so a depth-1 specialist attempting a delegation is rejected at depth 2.
+      //
+      // `toolFilter` is the SECOND line of defence, and it is only able to
+      // cover the delegation tools that live in an INHERITED layer. It can
+      // never cover a name the delegating agent itself registers — that is the
+      // `restrict()` exemption, and it is why `subagent` must not be named
+      // (see the `perAgentTools` check above). So the invariant is stated
+      // against exactly the restrictable delegation names, not against "all".
       //
       // (a) `maxDepth: 1` admits the orchestrator's own calls (whose child is
       //     depth 1) and refuses any call a depth-1 specialist would make.
       //     `maxDepth: 0` would be wrong: the runtime checks the child's depth,
       //     so 0 rejects the orchestrator too.
-      // (b) `toolFilter` removes the delegation tools from the child's surface.
+      // (b) `toolFilter` hides the inherited delegation tools.
       //
-      // Denying its OWN tool name is correct, not a defect: that removes the
-      // specialist's ability to invoke a same-named tool, and is exactly the
-      // least-privilege posture the reference roster uses for its leaves.
+      // `maxDepth` is REQUIRED here, not merely permitted. A specialist cannot
+      // filter away the per-agent `subagent`, so the depth cap is the only thing
+      // stopping it from recursing — and an OMITTED cap does not mean 1, it means
+      // "whatever the Host setting is". This profile raises that to 3
+      // (`profiles/desktop/cordis.patch.yml`: `- id: subagent … maxDepth: 3`), so
+      // an unpinned specialist could delegate to depth 2 and be admitted.
       const depth = p?.config?.maxDepth;
-      check(depth === 1 || depth === undefined,
-        `${p.id} caps depth at 1 so it is a leaf`,
-        String(depth));
-      const denied = new Set(f.deny ?? []);
-      const delegationTools = ['subagent', 'subagent_fork', 'explore', 'librarian', 'oracle', 'metis', 'momus'];
-      const exposed = delegationTools.filter((n) => !denied.has(n));
+      check(depth === 1,
+        `${p.id} pins maxDepth: 1 (the independent leaf guard)`,
+        depth === undefined
+          ? 'omitted — it would inherit the Host cap (maxDepth: 3 in this profile)'
+          : String(depth));
+      const f2 = p?.config?.toolFilter;
+      const denied = new Set(f2?.deny ?? []);
+      // Required to deny exactly the delegation names `restrict()` can remove.
+      // A per-agent name is excluded here because it CANNOT be named at all
+      // (naming it throws) — it is guarded by the depth cap instead.
+      const restrictableDelegation =
+        [...toolNames].filter((n) => !perAgentTools.has(n));
+      const exposed = restrictableDelegation.filter((n) => !denied.has(n));
       check(exposed.length === 0,
-        `${p.id} denies every delegation tool`,
+        `${p.id} denies every restrictable delegation tool`,
         exposed.join(', '));
+      if (depth !== 1) {
+        // Without the cap, an unfilterable per-agent tool would let this leaf
+        // recurse. Nothing else stands in the way once maxDepth is relaxed.
+        check(perAgentTools.size === 0,
+          `${p.id}: relaxing maxDepth is only safe while no per-agent tool exists`,
+          `per-agent tools: ${[...perAgentTools].join(', ')}`);
+      }
       const persona = p?.config?.persona;
       check(typeof persona === 'string' && persona.length > 100,
         `${p.id} carries an inline persona`, `${String(persona ?? '').length} chars`);
@@ -251,6 +346,23 @@ if (doc !== undefined) {
       .filter((n) => ['explore', 'librarian', 'oracle', 'metis', 'momus'].includes(n))
       .filter((n) => !toolNames.has(n));
     check(missing.length === 0, 'roster exposes the full specialist set', missing.join(', '));
+
+    // Every delegation name the preset PINS via modelSelectionSettings must be
+    // excluded from every filter — the invariant that this defect violated.
+    if (perAgentTools.size > 0) {
+      const named = [];
+      for (const p of subagentRows) {
+        for (const kind of ['allow', 'deny']) {
+          for (const name of p?.config?.toolFilter?.[kind] ?? []) {
+            if (perAgentTools.has(name)) named.push(`${p.id}.${kind}:${name}`);
+          }
+        }
+      }
+      check(named.length === 0,
+        'no toolFilter names a modelSelectionSettings tool',
+        named.join(', '));
+      notes.push(`per-agent (non-restrictable) delegation tools: ${[...perAgentTools].sort().join(', ')}`);
+    }
 
     notes.push(`preset id=${cfg.id} name=${cfg.name}`);
     notes.push(`plugin rows: ${plugins.length}, delegation rows: ${subagentRows.length}`);

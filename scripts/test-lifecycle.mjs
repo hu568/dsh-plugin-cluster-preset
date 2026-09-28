@@ -10,7 +10,7 @@
 // which is exactly the seam the plugin was written against.
 //
 // Run: node scripts/test-lifecycle.mjs
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -268,8 +268,13 @@ const fakeAgent = (depth = 0) => ({ session: { header: { delegationDepth: depth 
   const cfg = mod.resolveConfig({});
   check(cfg.stages.map((s) => s.age).join(',') === '20,30,40,60',
     'the four documented ages ship as defaults', cfg.stages.map((s) => s.age).join(','));
-  // `scripts/` and `智能体寿命论.md` both sit in the workspace root.
-  const doc = readFileSync(join(here, '..', '智能体寿命论.md'), 'utf8');
+  // The document moved from the workspace root into `docs/`; accept either so a
+  // reorganisation does not turn a content assertion into a path failure.
+  const docCandidates = [join(here, '..', 'docs', '智能体寿命论.md'), join(here, '..', '智能体寿命论.md')];
+  const docPath = docCandidates.find((candidate) => existsSync(candidate));
+  check(docPath !== undefined, '智能体寿命论.md is present',
+    `looked in: ${docCandidates.join(', ')}`);
+  const doc = docPath === undefined ? '' : readFileSync(docPath, 'utf8');
   for (const age of [20, 30, 40, 60]) {
     check(doc.includes(`**${age} 岁**`), `智能体寿命论.md still documents the ${age}-year stage`);
   }

@@ -1,0 +1,6 @@
+{
+  "name": "dsh-cluster-preset-lifecycle-reminder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Owning manifest for the cluster preset's relative-path plugin. Installed as profiles/<name>/cluster-preset/package.json."
+}

@@ -107,13 +107,46 @@
    > ⚠️ 这里**不能**写 `maxDepth: 0`。那个校验跑在被创建的子体上，不是调用者身上，
    > 所以 `0` 会连**编排者自己**的委派一起挡掉。这是个容易踩反的语义。
 
-2. **`toolFilter`**。每个专家通过 `deny` 移除了全部委派工具
+2. **`toolFilter`**（第二道防线）。每个专家通过 `deny` 移除了全部委派工具
    （`subagent` / `subagent_fork` / `explore` / `librarian` / `oracle` / `metis` / `momus`）
    以及 `write` / `edit`。选 `deny` 而非 `allow`，是为了让专家保留
    `read` / `grep` / `glob` / `pwsh` / `web_*` 等常规作业工具，不必在此逐条重列。
 
+   > ⚠️ **通用委派行不能设 `modelSelectionSettings: true`。**（曾经踩过，整条专家线因此全挂。）
+   >
+   > `tools.restrict()` 能移除的只有调用作用域**继承**到的名字；它的合法名集合是
+   > 「全局层 + 作用域链上的**祖先**层」，**永远不含调用作用域自己那一层**
+   > （`dsh-tools/lib/index.js:2937-2958`）。
+   >
+   > 而 `modelSelectionSettings: true` 会把该行的注册**从挂载时挪到每个 Agent 自己的层**——
+   > `dsh-tool-subagent` 不再于挂载时注册，而是等 Agent 创建后通过
+   > `candidate.ctx.inject(...)` 注册进**那个 Agent 自己的层**
+   > （`dsh-tool-subagent/lib/index.js:610-659`）。两个后果都会咬人：
+   >
+   > 1. **把名字写进 `deny` 会在子体创建之前就抛错**（不是拼写问题）：
+   >    ```
+   >    tools.restrict() names unknown global tool "subagent";
+   >    known global tools: …, explore, …, subagent_fork, …
+   >    ```
+   >    注意这条消息的不对称——`subagent_fork`（挂载时注册 ⇒ 祖先层）**在**可过滤名单里，
+   >    `subagent` **不在**。这正是当初那个 bug 的指纹。
+   > 2. 更麻烦的是，**每个被委派出去的子体都会自持一份该工具**（深度 1 的专家也不例外），
+   >    而「自己的层」对限制是豁免的 ⇒ **任何过滤器都拿不走它**。所以专家只要拿到
+   >    `subagent`，就能继续往下委派，「叶子」承诺当场作废。
+   >
+   > 把该标志**关掉**（本预设的做法），注册就留在挂载时的祖先层：`deny` 生效，
+   > 专家干脆看不到任何委派工具。代价是失去通用委派工具的子模型选择
+   > （`provider`/`model`/`reasoning_effort` 参数与 `list_subagent_models`）。
+   > 若日后要重新开启，**必须同时把 `subagent` 从所有 deny 名单里拿掉**，
+   > 并接受叶子保证退化为只靠 `maxDepth` 兜底 —— `scripts/validate.mjs` 会在
+   > 「设了标志却又写了名字」时直接判定 INVALID。
+
    过滤名单与 `maxDepth` 都在**创建子智能体时**校验（而非加载时），所以拼错名字会在
-   第一次委派时炸出来。`scripts/validate.mjs` 会先把每个名字与真实全局工具表对齐，提前拦截。
+   第一次委派时炸出来。`scripts/validate.mjs` 会先把每个名字与真实可过滤集合对齐，
+   并**从预设里推导**哪些名字是 per-agent（不可过滤）的，提前拦截。
+   `scripts/test-restrict-scope.mjs` 用真实 `ToolRuntime` + 真实 `restrict()`
+   跑两遍：① 发布产物的每份 deny 名单都必须通过，且子体确实拿不到那些工具；
+   ② **合成**当初的 per-agent 形状，断言它仍然复现原报错串（防止约束被遗忘）。
 
 ## 安装
 
@@ -128,8 +161,9 @@ node scripts/install.mjs --remove
 ```
 
 它把预设块追加进 `%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml`，用注释标记包起来，
-重跑会**替换**而不是叠加。同时把 `lifecycle-reminder.js` 复制到
-`profiles\desktop\cluster-preset\`，卸载时一并删除。执行前请自行备份该文件。
+重跑会**替换**而不是叠加。同时把 `lifecycle-reminder.js` 与 `cluster-preset.package.json`
+（落成 `cluster-preset/package.json`）复制到 `profiles\desktop\cluster-preset\`，
+卸载时一并删除。执行前请自行备份该文件。
 
 > ⚠️ **相对路径插件必须跟着补丁走。** 预设的子行按**声明它的补丁文件所在目录**解析，
 > 所以 YAML 里写的是 `./cluster-preset/lifecycle-reminder.js`。
@@ -137,10 +171,36 @@ node scripts/install.mjs --remove
 > `group: true` 的子数组 —— 嵌在 `config.plugins` 里的名字**不会被改写**。
 > 手工安装时务必自己把 `.js` 放到那个子目录，否则行会变成一个导入失败。
 
+> ⚠️⚠️ **同一个目录还必须有一个「归属清单」（`package.json`），且 `name` 与 `version` 都非空。**
+> 这是排查了很久才挖出来的第二个坑，症状离原因很远：
+>
+> 相对路径插件没有自己的清单时，向上回溯找到的最近清单是 **profile 自己的 `package.json`**，
+> 而 DSH 生成的它**只有 `name`、没有 `version`**。偏偏
+> `@deepseek-ai/dsh-plugin-package-inventory-deepseek`（默认启用）会为每个请求遍历
+> 「发起请求的那个 Agent 所在预设树」里的活跃条目并解析其归属包身份
+> （`dsh-plugin-package-inventory-deepseek/lib/index.js` 的 `PackageIdentityResolver.resolve`
+> → `identityFromManifest`），遇到「有 name 没 version」的清单**直接抛错**。
+> 适配器把这个失败包成 `REQUEST_EXTENSION`，于是：
+>
+> ```
+> TURN/END {"kind":"error","error":{"code":"REQUEST_EXTENSION",
+>           "message":"DeepSeek request extension preparation failed"}}
+> ```
+>
+> 也就是说，**只要用 DeepSeek 官方模型，这个预设的每一轮都会在「还没走到模型」时就死掉**；
+> 而用其它 provider（例如 profile 默认的 WorkBuddy）时那条扩展路径根本不执行，
+> 所以单看默认模型完全看不出问题 —— 这也是它一直潜伏的原因。
+>
+> 修法就是随插件一起发一个 `cluster-preset/package.json`（源文件
+> `cluster-preset.package.json`，`install.mjs` 负责复制并校验 `name`/`version` 非空）。
+> `scripts/validate.mjs` 会检查它存在且字段合法，也会检查 `install.mjs` 确实复制它。
+
 ### 方式二：手工
 
 1. 把 `cluster.patch.yml` 的 `- insert:` 块内容追加进 profile 的 `cordis.patch.yml`
 2. 建 `profiles\desktop\cluster-preset\`，把 `lifecycle-reminder.js` 复制进去
+3. 把 `cluster-preset.package.json` 复制为 `profiles\desktop\cluster-preset\package.json`
+   （**别省**，见上面那条警告）
 
 ### 生效方式
 
@@ -170,10 +230,27 @@ node scripts\probe-rows.mjs
 
 # 行为：驱动插件的真实 agent/pre-step，断言四个阶段各触发一次
 node scripts\test-lifecycle.mjs
+
+# 运行时语义：用真实 ToolRuntime + 真实 restrict() 验证 toolFilter 名单
+$env:ELECTRON_RUN_AS_NODE='1'
+& "C:\Users\Administrator\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe" scripts\test-restrict-scope.mjs
+
+# 反向测试：validate.mjs 必须在「缺陷版」上失败（否则它什么也没保护）
+node scripts\test-validate-negative.mjs
+
+# 诊断：把某个会话日志（多帧 zstd）打印成紧凑事件流
+$env:ELECTRON_RUN_AS_NODE='1'
+& "C:\...\DeepSeek Harness.exe" scripts\session-dump.mjs <session-id 或片段>
+
+# 真机验收（⚠️ 会花一次真实 LLM 轮次：建会话 → 委派 explore → 判成败）
+$env:ELECTRON_RUN_AS_NODE='1'
+& "C:\...\DeepSeek Harness.exe" scripts\acceptance-cluster-delegation.mjs cluster
+# 传 standard 当对照组（便宜的健全性检查）
 ```
 
 `validate.mjs` 检查：YAML 可解析、形状正确、id 唯一、每行都有包名、
 必需的配置字段在位、`{{变量}}` 已注册、`toolFilter` 名字都是真实工具、
+**没有任何 toolFilter 命名 per-agent（不可过滤）工具**、每个专家钉住 `maxDepth: 1`、
 相对路径插件存在且命名正确、叶子约束成立。
 
 `preflight.mjs` 检查：真实 `js-yaml` + 真实 `composeEntries` 能组合出 `preset-cluster`、
@@ -182,9 +259,26 @@ node scripts\test-lifecycle.mjs
 `probe-roster.mjs` 走 Host 的 `/api` RPC（`agentPresets/list`），报告每个预设的
 `broken` 字段 —— 这是区分「挂上了」与「真的能激活」的唯一信号。
 
+`test-restrict-scope.mjs` 是这次缺陷的回归测试：它**读发布产物**里的每份 deny 名单，
+用真实 `ToolRuntime` + 真实 `restrict()` 跑两遍——
+① 发布形状下每份名单都必须被接受，且委托出去的子体确实看不到那些工具；
+② **合成**当初的 per-agent 形状（把 `subagent` 只注册进 Agent 自己的层），
+断言它仍然复现原始报错串。②保证这条约束不会被后人遗忘。
+
+`test-validate-negative.mjs` 是 `validate.mjs` 的反向测试：把当初的缺陷（通用行重新
+带上 `modelSelectionSettings: true`，而 deny 名单仍在写 `subagent`）注入一份隔离副本，
+断言 `validate.mjs` **exit 非 0**；同时断言未修改的版本仍然 VALID（否则它只是「永远失败」）。
+
 `test-lifecycle.mjs` 直接驱动插件的真实 `agent/pre-step` 处理器（只伪造它读取的宿主服务，
 不复制它的逻辑），断言：年龄换算符合文档刻度、四个阶段**精确在 20/30/40/60 岁各触发一次**、
 跳级只提示最高档、预设/子智能体/缺服务三道闸门、注入消息满足会话的形状校验。
+
+`session-dump.mjs` 是诊断工具：会话日志是**多帧拼接 zstd**（同步与流式 API 都只解第一帧，
+所以朴素读法只会看到一个事件），它逐帧解码后打印 meta / 工具调用 / 错误 / 回合结局。
+
+`acceptance-cluster-delegation.mjs` 是**真机验收**（**会花真实模型轮次**，故意不进常规套件）：
+用 Host 的 `/api` 造一个 cluster 会话 → 委派 `explore` → 断言「调用了 explore 且没有
+`restrict()` 错误」。这正是当初那个 bug 的端到端判据；传 `standard` 则跑一个便宜的对照组。
 
 ## 实测结果
 
