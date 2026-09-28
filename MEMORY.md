@@ -8,11 +8,47 @@
 （`explore` / `librarian` / `oracle` / `metis` / `momus`）+ 2 个通用委派
 （`subagent` spawn / `subagent_fork` fork）。模仿 oh-my-openagent 的 Sisyphus。
 
-- **不是** npm 包，也没有「扫描预设目录」这回事：预设 = 往 profile 补丁里 `insert` 一条
-  `@deepseek-ai/dsh-agent-preset` 行，`config.plugins` 就是那个 Agent 的完整子插件表。
+- **不是** npm 包（现在同时也是可分发的 **bundle**，见下节），也没有「扫描预设目录」这回事：
+  预设 = 往 profile 补丁里 `insert` 一条 `@deepseek-ai/dsh-agent-preset` 行，
+  `config.plugins` 就是那个 Agent 的完整子插件表。
 - 已装进 desktop profile：`C:\Users\Administrator\.dsh\profiles\desktop\cordis.patch.yml`
   的 managed block（`# >>>>>>>> cluster preset …`），相对路径插件与清单复制到
   `profiles\desktop\cluster-preset\`。改了配置由 `dsh-hmr` **热重载，无需重启**。
+- 已开源：`github.com/hu568/dsh-plugin-cluster-preset`（public / MIT /
+  topics `dsh-plugin`+`dsh`+`cordis-plugin`+`agent-preset`），v0.1.0 Release 附 tarball。
+
+## 分发形式（2026-09-28 查实）
+
+- **DSH 能安装的只有 bundle**，判据唯一：`package.json` 里存在 `dsh.bundle.patch`
+  （`dsh-plugin-manager/lib/index.js:226-229`）。缺了就降级普通依赖 + 告警
+  `declares no dsh.bundle — installed as a plain dependency, not a profile layer`；
+  「plugin」在分发层没有独立身份，它只是 patch 插进组合树的一行。
+- **bundle 自身永远不会被 `import()`**。加载只读 manifest + patch 文件
+  （`dsh-app-boot/lib/index.js:881-887` 解析目录、`:919-955` 加载、`:495-509` join 路径、
+  `:3526-3534` readFileSync）。唯一真 import 的是 Loader 对 **patch 每行 `name`** 做的事
+  （`cordis-plugin-loader/lib/index.js:214-228`），包名不在自己的 insert 列表里。
+  ⇒ **不需要可被 import 的模块，`main`/`exports` 都不必需**（本仓库两者都删了）。
+- **patch 文件名没有约定**，`bundlePatchPaths` 就是 `join(packageDir, file)`；
+  `cordis.patch.yml` 只是惯例（`dsh-web-app` 用 5 个文件）。顶层必须是 **YAML 数组**
+  （`parsePatchList` `:3558-3568`，非数组直接 throw）。⇒ 直接指向 `cluster.patch.yml`，
+  不要为「惯例」多造一份副本（多一份就多一份漂移）。
+- **`files` 漏了 patch = 静默失效**：`loadOverlayPatches` throw → 进 `skippedBundles`
+  （`:939-944`）→ 只在 stderr 打一行（`:515-517`）。不是崩溃，是装了个寂寞。
+- **`github:` spec 是 pnpm git clone，会跑生命周期脚本且被 pnpm 拦**
+  （`ERR_PNPM_IGNORED_BUILDS` / `GIT_DEP_PREPARE_NOT_ALLOWED`）。
+  ⇒ 提交**可直接运行的产物**，且**不写** `prepare`/`prepublish`/`postinstall`。
+  连带坑：pnpm 的 `packageShouldBeBuilt`（自带 pnpm 11.7.0，`pnpm.mjs:133576-133587`）
+  在「`main` 指向不存在的文件 + 有 prepublish 类脚本」时判定需要构建 ⇒ 别写空 `main`。
+- **仓库布局 = 运行时布局**：作为 bundle 时 patch 在包根，相对路径
+  `./cluster-preset/lifecycle-reminder.js` 必须解析到**包内** `cluster-preset/`。
+  所以插件与其归属清单就放在仓库的 `cluster-preset/`（不再由 install.mjs 从根目录搬）。
+- 其它 spec：`file:`/`link:` 与本地 tarball **必须绝对路径**；远程 `http(s)` 必须是
+  git 仓库或 `.tgz`；`#...` DSH 从不解析（subdir / `#semver:` 能否用全看 pnpm，别当特性写）。
+- 更新必须 **bump `version`**，否则 spec 字符串没变会报 `ambiguous-install`。
+- `dsh-plugin-pack` Schema v1 **不是 DSH 定义的、DSH 也不消费**（社区约定，靠 GitHub topic
+  发现）。单 bundle 不需要它。
+- ★安装后**改代码必须完全重启 DSH**（`dsh-hmr` 的 ignored 含 `**/node_modules`，
+  插件就装在那下面 + ESM loadCache 缓存）；只有改 patch 配置才热生效。
 
 ## 文件
 
@@ -20,8 +56,9 @@
 |---|---|
 | `cluster.patch.yml` | **生成物**，别手改；源头是 `scripts/build-preset.mjs` + `prompts/*.md` |
 | `prompts/orchestrator.md` + 5 个专家 prompt | 人设正文，build 时内联成 `persona` |
-| `lifecycle-reminder.js` | 「智能体寿命论」阶段提示器，**相对路径插件**（零依赖） |
-| `cluster-preset.package.json` | 相对路径插件的**归属清单**，install 时落成 `cluster-preset/package.json` |
+| `package.json` | **bundle 清单**（`dsh.bundle.patch`）—— 分发的唯一判据 |
+| `cluster-preset/lifecycle-reminder.js` | 「智能体寿命论」阶段提示器，**相对路径插件**（零依赖） |
+| `cluster-preset/package.json` | 相对路径插件的**归属清单**（`name`/`version` 必须非空） |
 | `scripts/build-preset.mjs` | 从 prompts 重建 `cluster.patch.yml` |
 | `scripts/install.mjs` | 幂等安装/卸载（写 profile patch + 复制 js/清单） |
 | `scripts/validate.mjs` / `preflight.mjs` | 离线不变量 / 用 DSH 自己的 loader 组合真实 profile |
@@ -44,8 +81,8 @@
 
 ## 第二个必守约束：相对路径插件要自带清单
 
-`cluster-preset/` 里**必须**有 `package.json`（`name` 与 `version` 都非空，源文件
-`cluster-preset.package.json`，`install.mjs` 负责复制并校验）。否则向上找的最近清单是
+`cluster-preset/` 里**必须**有 `package.json`（`name` 与 `version` 都非空，它就放在
+`cluster-preset/package.json`，`install.mjs` 复制并校验）。否则向上找的最近清单是
 **profile 自己的 `package.json`**（只有 `name`、没有 `version`），
 `dsh-plugin-package-inventory-deepseek`（默认启用）解析包身份时会抛错，适配器包成
 `REQUEST_EXTENSION` ⇒ **用 DeepSeek 官方模型的每一轮都在「还没走到模型」时死掉**
