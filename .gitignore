@@ -1,3 +1,7 @@
 # Local scratch — exported session dumps, one-off probes, temp output.
 # The keepers live in scripts/; anything here is disposable.
 TMP/
+
+# Build artifact. `pnpm pack` produces it for a GitHub Release; it must never be
+# committed, or the next pack would ship a tarball inside a tarball.
+*.tgz

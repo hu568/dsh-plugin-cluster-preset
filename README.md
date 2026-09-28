@@ -216,8 +216,7 @@ node scripts/install.mjs --remove
 
 ### 方式二：手工（从 GitHub 克隆后）
 
-1. 把 `cluster.patch.yml`（或 `cordis.patch.yml`，两者内容相同）的 `- insert:` 块
-   追加进 profile 的 `cordis.patch.yml`
+1. 把 `cluster.patch.yml` 的 `- insert:` 块内容追加进 profile 的 `cordis.patch.yml`
 2. 建 `profiles\desktop\cluster-preset\`，把 `cluster-preset/lifecycle-reminder.js` 复制进去
 3. 把 `cluster-preset/package.json` 复制为 `profiles\desktop\cluster-preset\package.json`
    （**别省**，见上面那条警告）

@@ -5,7 +5,6 @@
   "type": "module",
   "files": [
     "cluster.patch.yml",
-    "cordis.patch.yml",
     "cluster-preset",
     "prompts",
     "scripts",
@@ -38,7 +37,7 @@
   "dsh": {
     "manifestVersion": 1,
     "bundle": {
-      "patch": "./cordis.patch.yml"
+      "patch": "./cluster.patch.yml"
     }
   }
 }

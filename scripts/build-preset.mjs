@@ -362,12 +362,4 @@ writeFileSync(outFile, out, 'utf8');
 const lines = out.split('\n').length;
 console.log(`wrote ${outFile} (${out.length} bytes, ${lines} lines)`);
 
-// The bundle patch entry is the same document under the name DSH's bundle
-// loader looks for. Keep it in lockstep here rather than by hand, so the two
-// can never drift — a stale `cordis.patch.yml` would silently ship an old
-// preset to anyone who installs via `github:` / tarball.
-const bundlePatchFile = join(here, '..', 'cordis.patch.yml');
-writeFileSync(bundlePatchFile, out, 'utf8');
-console.log(`wrote ${bundlePatchFile} (bundle patch entry, identical content)`);
-
 console.log(`specialists: ${specialists.map((s) => `${s.toolName}(${s.id})`).join(', ')}`);
